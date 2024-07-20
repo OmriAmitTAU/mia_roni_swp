@@ -16,7 +16,7 @@ def symnmf(k, points, n_points, dim):
     np.random.seed(0)
     W = norm(points, n_points, dim)
     m = np.mean(W)
-    H = np.random.uniform(0,2*math.sqrt(m/k),size=(n_points,k))
+    H = np.random.uniform(0, 2 * math.sqrt(m/k), size=(n_points, k))
     H_list = H.tolist()
     output = mysymnmf.symnmf(H_list, W, n_points, k)
     return output
@@ -24,37 +24,31 @@ def symnmf(k, points, n_points, dim):
 
 def main():
     # verify correct amount of arguments
-    if (len(sys.argv) < 2) or (len(sys.argv) > 3):
-        print("An Error Has Occurred")
-        return
-
-    k = sys.argv[1]
-    file_name = sys.argv[2]
-
-    # to read file we will use try-except block as learned
     try:
+
+        k = sys.argv[1]
+        file_name = sys.argv[2]
+
+        # to read file we will use try-except block as learned
         data = pd.read_csv(file_name, header=None)
 
-    except Exception as e:
-        print("An Error Has Occurred")
-        sys.exit(1)
+        points = [x.tolist() for index, x in data.iterrows()]
+        num_points = len(points)
+        if (int(k) >= num_points) or (num_points == 0):
+            print("An Error Has Occurred")
+            sys.exit(1)
 
-    points = [x.tolist() for index, x in data.iterrows()]
-    if (int(k) >= len(points)) or (len(points) == 0):
-        print("An Error Has Occurred")
-        sys.exit(1)
-
-    try:
         # calculate silhouette score
         kmeanslist = kmeans.kmeans(points, int(k))
-        H = symnmf(int(k), points, len(points), len(points[0]))
-        symnmflist = mysymnmf.analysis(H, len(points), int(k))
+        H = symnmf(int(k), points, num_points, len(points[0]))
+        symnmflist = mysymnmf.analysis(H, num_points, int(k))
         nmf = sk.silhouette_score(points, symnmflist)
         kmean = sk.silhouette_score(points, kmeanslist)
 
     except Exception as e:
         print("An Error Has Occurred")
-        sys.exit(1)
+        # sys.exit(1)
+        raise(e)
 
     print("nmf: {:.4f}".format(nmf))
     print("kmeans: {:.4f}".format(kmean))

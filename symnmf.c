@@ -1,183 +1,387 @@
-#define PY_SSIZE_T_CLEAN
-#include <Python.h>
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
+#include <string.h>
+#include "symnmf.h"
 
-double euclidean_distance(double *a, double *b, int n);
-void compute_centroids(double **data, int *labels, double **centroids, int n, int k, int d);
-int *assign_labels(double **data, double **centroids, int n, int k, int d);
-PyObject *kmeans(double **data, double **centroids, int n, int k, int d, int max_iter, double epsilon);
+/* function to initialize zeros matrix */
+double **initialize_matrix(int numRows, int numCols)
+{
+    double **mat = (double **)malloc(numRows * sizeof(double *));
+    int rowIndex = 0;
+    int colIndex = 0;
 
-#define INFINITY (__builtin_inff ())
+    for (rowIndex = 0; rowIndex < numRows; rowIndex++)
+    {
+        mat[rowIndex] = (double *)malloc(numCols * sizeof(double));
+        for (colIndex = 0; colIndex < numCols; colIndex++)
+        {
+            mat[rowIndex][colIndex] = 0.0;
+        }
+    }
+    return mat;
+}
 
-double euclidean_distance(double *a, double *b, int n) {
-    double dist = 0;
+/* function to transpose given matrix */
+double **transpose(double **mat, int numRows, int numCols)
+{
+    double **transposed = (double **)malloc(numCols * sizeof(double *));
+    int rowIndex = 0;
+    int colIndex = 0;
+
+    for (colIndex = 0; colIndex < numCols; colIndex++)
+    {
+        transposed[colIndex] = (double *)malloc(numRows * sizeof(double));
+        for (rowIndex = 0; rowIndex < numRows; rowIndex++)
+        {
+            transposed[colIndex][rowIndex] = mat[rowIndex][colIndex];
+        }
+    }
+    return transposed;
+}
+
+/* Function for matrix multiplication */
+double **matrix_multiplication(double **mat1, int rows1, int cols1, double **mat2, int rows2, int cols2)
+{
+    double **output;
+    int r1_index;
+    int c2_index;
+    int c1_index;
+
+    if (cols1 != rows2)
+    {
+        return NULL;
+    }
+
+    output = initialize_matrix(rows1, cols2);
+
+    for (r1_index = 0; r1_index < rows1; r1_index++)
+    {
+        for (c2_index = 0; c2_index < cols2; c2_index++)
+        {
+            for (c1_index = 0; c1_index < cols1; c1_index++)
+            {
+                output[r1_index][c2_index] += mat1[r1_index][c1_index] * mat2[c1_index][c2_index];
+            }
+        }
+    }
+    return output;
+}
+
+/* function to calculate Frobenius distance between the given matrices */
+double frobidean_distance(double **mat1, double **mat2, int rows, int cols)
+{
+    int r;
+    int c;
+    double distance = 0.0;
+    for (r = 0; r < rows; r++)
+    {
+        for (c = 0; c < cols; c++)
+        {
+            distance += pow(mat1[r][c] - mat2[r][c], 2);
+        }
+    }
+    distance = sqrt(distance);
+    return distance;
+}
+
+/* function to calculate Euclidean distance between two given vectors */
+double euclidean_distance(double *vec1, double *vec2, int dim)
+{
     int i;
-    for (i = 0; i < n; i++) {
-        dist += (a[i] - b[i]) * (a[i] - b[i]);
+    double distance = 0.0;
+    for (i = 0; i < dim; i++)
+    {
+        distance += pow(vec1[i] - vec2[i], 2);
     }
-    return sqrt(dist);
+    return distance;
 }
 
-void compute_centroids(double **data, int *labels, double **centroids, int n, int k, int d) { /* d is length of a word */
-    int *counts = (int *)malloc(k * sizeof(double));
-    int i, j;
-    for (i = 0; i < k; i++) {
-        counts[i] = 0;
-        for (j = 0; j < d; j++) {
-            centroids[i][j] = 0;
+/* Helper function to free allocated memory for a matrix */
+void free_matrix(double **matrix, int n)
+{
+    int i;
+    for (i = 0; i < n; i++)
+    {
+        free(matrix[i]);
+    }
+    free(matrix);
+}
+
+/* function to calculate sym function */
+double **symc(double **points, int n, int d)
+{
+    int i;
+    int j;
+    double **sym_matrix = initialize_matrix(n, n);
+
+    for (i = 0; i < n; i++)
+    {
+        for (j = 0; j < i; j++)
+        {
+            sym_matrix[i][j] = exp(-0.5 * euclidean_distance(points[i], points[j], d));
+            sym_matrix[j][i] = sym_matrix[i][j];
+        }
+        sym_matrix[i][i] = 0;
+    }
+    return sym_matrix;
+}
+
+/* function for ddg */
+double **ddgc(double **points, int n, int d)
+{
+    int i;
+    int j;
+    double **C, **output;
+    C = symc(points, n, d);
+    output = initialize_matrix(n, n);
+
+    for (i = 0; i < n; i++)
+    {
+        for (j = 0; j < n; j++)
+        {
+            output[i][i] += C[i][j];
         }
     }
-    for (i = 0; i < n; i++) {
-        int label = labels[i];
-        counts[label]++;
-        for (j = 0; j < d; j++) {
-            centroids[label][j] += data[i][j];
+
+    /* Free allocated memory */
+    free_matrix(C, n);
+
+    return output;
+}
+
+/* function to calculate norm */
+double **normc(double **points, int n, int d)
+{
+    double **D = ddgc(points, n, d);
+    double **A = symc(points, n, d);
+    double **norm_matrix;
+    double **temp_matrix;
+    int i;
+
+    for (i = 0; i < n; i++)
+    {
+        D[i][i] = 1.0 / sqrt(D[i][i]);
+    }
+    /* calculate norm matrix */
+    temp_matrix = matrix_multiplication(D, n, n, A, n, n);
+    norm_matrix = matrix_multiplication(temp_matrix, n, n, D, n, n);
+
+    /* free allocated memory */
+    for (i = 0; i < n; i++)
+    {
+        free(D[i]);
+        free(A[i]);
+        free(temp_matrix[i]);
+    }
+    free(D);
+    free(A);
+    free(temp_matrix);
+
+    return norm_matrix;
+}
+
+/* function for iteration of symnmf */
+double **calc(double **H, double **W, int n, int k)
+{
+    int i;
+    int j;
+    double **WH = matrix_multiplication(W, n, n, H, n, k);
+    double **Ht = transpose(H, n, k);
+    double **HHt = matrix_multiplication(H, n, k, Ht, k, n);
+    double **HHtH = matrix_multiplication(HHt, n, n, H, n, k);
+    double **next_H = initialize_matrix(n, k);
+
+    for (i = 0; i < n; i++)
+    {
+        for (j = 0; j < k; j++)
+        {
+            next_H[i][j] = H[i][j] * (0.5 + 0.5 * (WH[i][j] / HHtH[i][j]));
         }
     }
-    for (i = 0; i < k; i++) {
-        if (counts[i] > 0) {
-            for (j = 0; j < d; j++) {
-                centroids[i][j] /= counts[i];
+
+    /* free allocated memory */
+    free_matrix(WH, n);
+    free_matrix(Ht, k);
+    free_matrix(HHt, n);
+    free_matrix(HHtH, n);
+
+    return next_H;
+}
+
+/* A function to do the symnmf */
+double **symnmfc(double **H, double **W, int n, int k)
+{
+    int iter, i, j;
+    double **next_H = initialize_matrix(n, k);
+    iter = 0;
+    for (iter = 0; iter < 300; iter ++)
+    {
+        next_H = calc(H, W, n, k);
+
+        if (pow(frobidean_distance(H, next_H, n, k), 2) < EPSILON)
+        {
+            return next_H;
+        }
+
+        for (i = 0; i < n; i++)
+        {
+            for (j = 0; j < k; j++)
+            {
+                H[i][j] = next_H[i][j];
             }
         }
     }
 
-    free(counts);
+    return next_H;
 }
 
-int *assign_labels(double **data, double **centroids, int n, int k, int d) {
-    int *labels, i, j, label;
-    labels = malloc(n * sizeof(int));
-    for (i = 0; i < n; i++) {
-        double min_dist = INFINITY;
-        label = -1;
-        for (j = 0; j < k; j++) {
-            double dist = euclidean_distance(data[i], centroids[j], d);
-            if (dist < min_dist) {
-                min_dist = dist;
-                label = j;
+/* function that for each point return its cluster index */
+int *analysisc(double **H, int n, int k)
+{
+    int i;
+    int j;
+    int *labels = (int*) malloc(n * sizeof(int));
+
+    for (i = 0; i < n; i++)
+    {
+        /* initialization of max to first value of point */
+        double max_val = H[i][0];
+        int max_index = 0;
+
+        for (j = 1; j < k; j++)
+        {
+            /* if new max value then update */
+            if (H[i][j] > max_val)
+            {
+                max_val = H[i][j];
+                max_index = j;
             }
         }
-        labels[i] = label;
+
+        labels[i] = max_index;
     }
+
     return labels;
 }
 
+/* Helper function to read file and count rows and columns */
+void read_file_dimensions(char *file_name, int *n, int *d)
+{
+    FILE *file;
+    int ch;
 
-PyObject *kmeans( int k, int n, int d, double **data, int max_iter, double **centroids, double epsilon) {
-    double **prev_centroids;
-    int i,j, iter, converged;
-    int* labels;
-    prev_centroids = malloc(k * sizeof(double *));
-    for (i = 0; i < k; i++) {
-        prev_centroids[i] = malloc(d * sizeof(double));
-        for (j = 0; j < d; j++) {
-            prev_centroids[i][j] = centroids[i][j];
-        }
+    file = fopen(file_name, "r");
+    if (!file)
+    {
+        exit(1);
     }
-    labels = NULL;
-    for (iter = 0; iter < max_iter; iter++) {
-        labels = assign_labels(data, centroids, n, k, d);
-        compute_centroids(data, labels, centroids, n, k, d);
-        converged = 1;
-        for (i = 0; i < k; i++) {
-            double dist = euclidean_distance(centroids[i], prev_centroids[i], d);
-            if (dist > epsilon) {
-                converged = 0;
-                break;
-            }
-        }
-        if (converged) {
-            break;
-        }
-        free(labels);
-        for (i = 0; i < k; i++) {
-            for (j = 0; j < d; j++) {
-                prev_centroids[i][j] = centroids[i][j];
-            }
-        }
-    }
-    PyObject *centroids_list = PyList_New(k);
-    for (i = 0; i < k; i++) {
-        PyObject *centroid = PyList_New(d);
-        for (j = 0; j < d; j++) {
-            PyObject *coordinate = PyFloat_FromDouble(centroids[i][j]);
-            PyList_SetItem(centroid, j, coordinate);
-        }
-        PyList_SetItem(centroids_list, i, centroid);
-    }
-    for (i = 0; i < k; i++) {
-        free(centroids[i]);
-        free(prev_centroids[i]);
-    }
-    free(centroids);
-    free(prev_centroids);
-    free(labels);
-    for (i = 0; i < n; i++) {
-        free(data[i]);
-    }
-    free(data);
 
-    return centroids_list;
+    *n = 0;
+    *d = 0;
+    while ((ch = fgetc(file)) != EOF)
+    {
+        if (ch == '\n')
+        {
+            (*n)++;
+        }
+        else if (ch == ',' && *n == 0)
+        {
+            (*d)++;
+        }
+    }
+    (*d)++;
+    fclose(file);
 }
 
-static PyObject *fit(PyObject *self, PyObject *args) {
-    PyObject *data_points_obj;
-    PyObject *centroids_obj;
-    int K;
-    int max_iter;
-    double epsilon;
-
-    if (!PyArg_ParseTuple(args, "OOiid", &data_points_obj, &centroids_obj, &K, &max_iter, &epsilon)) {
-        return NULL;
+/* Helper function to read data from file into matrix */
+double **read_data(char *file_name, int n, int d)
+{
+    FILE *file;
+    double **data;
+    int i;
+    int j;
+    
+    file = fopen(file_name, "r");
+    if (!file)
+    {
+        exit(1);
     }
 
-    int n = PyList_Size(data_points_obj);
-    int d = PyList_Size(PyList_GetItem(data_points_obj, 0));
-    double **data_points = (double **)malloc(n * sizeof(double *));
-    for (int i = 0; i < n; i++) {
-        data_points[i] = (double *)malloc(d * sizeof(double));
-
-        PyObject *data_point_obj = PyList_GetItem(data_points_obj, i);
-        for (int j = 0; j < d; j++) {
-            PyObject *coordinate_obj = PyList_GetItem(data_point_obj, j);
-            data_points[i][j] = PyFloat_AsDouble(coordinate_obj);
+    data = (double **)malloc(n * sizeof(double *));
+    for (i = 0; i < n; i++)
+    {
+        data[i] = (double *)malloc(d * sizeof(double));
+        for (j = 0; j < d; j++)
+        {
+            if (fscanf(file, "%lf,", &data[i][j]) != 1)
+            {
+                exit(1);
+            }
         }
     }
-
-    double **centroids = (double **)malloc(K * sizeof(double *));
-    for (int i = 0; i < K; i++) {
-        centroids[i] = (double *)malloc(d * sizeof(double));
-
-        PyObject *centroid_obj = PyList_GetItem(centroids_obj, i);
-        for (int j = 0; j < d; j++) {
-            PyObject *coordinate_obj = PyList_GetItem(centroid_obj, j);
-            centroids[i][j] = PyFloat_AsDouble(coordinate_obj);
-        }
-    }
-    PyObject *result = kmeans(data_points, centroids, n, K, d, max_iter, epsilon);
-    if (result == NULL) {
-        printf("An Error Has Occurred");
-        return NULL;
-    }
-    return Py_BuildValue("O", result);
+    fclose(file);
+    return data;
 }
 
-static PyMethodDef kmeans_methods[] = {
-    {"fit", fit, METH_VARARGS, PyDoc_STR("expects a list of the points, initialized k clusters, K - number of clusters, max iteration number and epsilon.")},
-    {NULL, NULL, 0, NULL}
-};
+/* Helper function to initialize the matrix based on the goal */
+double **initialize_matrix_goal(double **data, int n, int d, char *goal)
+{
+    if (strcmp(goal, "sym") == 0)
+    {
+        return symc(data, n, d);
+    }
+    else if (strcmp(goal, "ddg") == 0)
+    {
+        return ddgc(data, n, d);
+    }
+    else
+    {
+        return normc(data, n, d);
+    }
+}
 
-static struct PyModuleDef kmeans_module = {PyModuleDef_HEAD_INIT,"kmeanssp","K-means clustering module",-1,kmeans_methods};
-
-PyMODINIT_FUNC PyInit_kmeanssp(void) {
-    PyObject *mod;
-    mod = PyModule_Create(&kmeans_module);
-    if (!mod){
-        printf("An Error Has Occurred");
-        return NULL;
+/* Helper function to print the matrix */
+void print_matrix(double **matrix, int n)
+{
+    int i;
+    int j;
+    for (i = 0; i < n; i++)
+    {
+        for ( j = 0; j < n; j++)
+        {
+            printf("%.4f", matrix[i][j]);
+            if (j < n - 1)
+            {
+                printf(",");
+            }
         }
-    return mod;
+        printf("\n");
+    }
+}
+
+int main(int argc, char *argv[])
+{
+    char *goal, *file_name;
+    double **data, **A;
+    int n, d;
+
+    if (argc != 3)
+    {
+        return 1;
+    }
+
+    goal = argv[1];
+    file_name = argv[2];
+
+    read_file_dimensions(file_name, &n, &d);
+    data = read_data(file_name, n, d);
+    A = initialize_matrix_goal(data, n, d, goal);
+
+    print_matrix(A, n);
+
+    free_matrix(data, n);
+    free_matrix(A, n);
+
+    return 0;
 }
